@@ -11,7 +11,12 @@ app = FastAPI()
 qdrant_host = "https://434bc49c-5c75-4a57-a104-55a27b6e5ba6.eu-central-1-0.aws.cloud.qdrant.io:6333"
 qdrant_api_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.ma_qYDVyytgTSBxdVLK_bj565_d56F1n80y_yOyb1BA"  # замени на свой
 collection_name = "jurist_docs"
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+from sentence_transformers import SentenceTransformer, LoggingHandler
+import logging
+
+logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO, handlers=[LoggingHandler()])
+embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
 
 # --- Qdrant клиент
 qdrant = QdrantClient(
