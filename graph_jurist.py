@@ -1,40 +1,55 @@
-from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import ToolNode
-from langchain.schema.runnable import Runnable
-from langchain.chat_models import ChatOpenAI
-from langchain.tools.render import format_tool_to_openai_function
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-
+from langgraph.graph import StateGraph
+from typing import TypedDict
 import os
+import httpx
 
-llm = ChatOpenAI(
-    model="gpt-4o",
-    temperature=0.7,
-    api_key=os.getenv("OPENAI_API_KEY")
-)
+# --- Тип состояния графа
+class GraphState(TypedDict):
+    messages: list
+    context: str
 
-def generate_answer(state):
+# --- Запрос к OpenAI Chat Completion
+async def call_openai(messages, context):
+    system_prompt = f"Ты — AI-юрист. Используй только проверенные источники. Контекст:\n{context}"
+    chat_messages = [{"role": "system", "content": system_prompt}] + messages
+
+    print("📡 Отправляю запрос в OpenAI...")  # ✅ лог перед отправкой
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=60.0, connect=10.0)) as client:
+        resp = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "gpt-4o",
+                "messages": chat_messages,
+                "temperature": 0.7
+            }
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+
+# --- Узел генерации ответа
+async def generate_answer(state: GraphState):
     messages = state["messages"]
     context = state["context"]
+    response = await call_openai(messages, context)
+    return {"messages": messages, "context": context, "response": response}
 
-    system = SystemMessage(content=f"Ты — профессиональный AI-юрист. Используй только проверенные данные из контекста:\n{context}")
-    history = [system] + [HumanMessage(**m) if m["role"] == "user" else AIMessage(**m) for m in messages]
+# --- Сборка и запуск LangGraph
+def run_jurist_graph(user_messages, context):
+    builder = StateGraph(GraphState)
+    builder.add_node("generate", generate_answer)
+    builder.set_entry_point("generate")
+    builder.set_finish_point("generate")
+    graph = builder.compile()
 
-    answer = llm.invoke(history)
-    state["messages"].append({"role": "assistant", "content": answer.content})
-    return state
-
-graph = StateGraph()
-graph.add_node("generate", generate_answer)
-graph.set_entry_point("generate")
-graph.set_finish_point("generate")
-
-app_graph: Runnable = graph.compile()
-
-async def run_jurist_graph(messages: list[dict], context: str) -> str:
     state = {
-        "messages": messages,
+        "messages": user_messages,
         "context": context
     }
-    result = app_graph.invoke(state)
-    return result["messages"][-1]["content"]
+
+    result = graph.invoke(state)
+    return result["response"]
