@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from qdrant_client import QdrantClient
-from qdrant_client.models import PointStruct, VectorParams, Distance, Filter, FieldCondition, MatchValue, SearchRequest
+from qdrant_client.models import PointStruct, VectorParams, Distance
 import httpx
 import uuid
 import os
@@ -23,7 +23,7 @@ if COLLECTION not in [c.name for c in qdrant.get_collections().collections]:
 
 # --- Получение эмбеддинга через OpenAI
 async def embed_text(text: str):
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=30.0, connect=10.0)) as client:
         resp = await client.post(
             "https://api.openai.com/v1/embeddings",
             headers={
@@ -71,17 +71,17 @@ async def chat(request: Request):
     # 1. Векторизуем запрос
     query_vector = await embed_text(user_input)
 
-    # 2. Ищем похожие документы в Qdrant
+    # 2. Ищем 1 короткий документ в Qdrant
     search_result = qdrant.search(
         collection_name=COLLECTION,
         query_vector=query_vector,
-        limit=3
+        limit=1  # Ограничили до одного
     )
 
-    # 3. Собираем найденные фрагменты
+    # 3. Собираем контекст
     context = "\n---\n".join([hit.payload["text"] for hit in search_result if "text" in hit.payload])
 
-    # 4. Добавляем в prompt
+    # 4. Формируем сообщения
     system_message = {
         "role": "system",
         "content": f"Ты — профессиональный AI-юрист. Используй только проверенную информацию. Контекст:\n{context}"
@@ -90,7 +90,7 @@ async def chat(request: Request):
     messages = [system_message] + user_messages
 
     # 5. Отправляем в OpenAI Chat API
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=60.0)) as client:
         response = await client.post(
             "https://api.openai.com/v1/chat/completions",
             headers={
@@ -103,6 +103,10 @@ async def chat(request: Request):
                 "temperature": 0.7
             }
         )
+
+        response.raise_for_status()
+        return response.json()
+
 
         response.raise_for_status()
         return response.json()
